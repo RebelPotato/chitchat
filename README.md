@@ -1,6 +1,8 @@
-# ChitchatCore
+# ChitChat
 
-**TODO: Add description**
+A Realtalk-like dynamic medium in the real world.
+
+(Proof of concept)
 
 ## Installation
 
