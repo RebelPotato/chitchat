@@ -33,11 +33,8 @@ alias ChitChat.Space
   end
 
   def claim(space, statement) do
-    :ok = Space.create_statement(space, {self(), statement})
-    nil
   end
 
   def wish(space, name, statement) do
-    claim(space, {name, "wishes", statement})
   end
 end
