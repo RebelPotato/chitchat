@@ -2,69 +2,132 @@ defmodule ChitChat.Claim do
   @moduledoc """
   Utility functions for operating on claims.
   """
+  defmodule Var do
+    @doc """
+    A variable in a claim.
+    """
+    alias Var
+
+    @type t :: %Var{var: atom(), context: atom(), module: atom()}
+    defstruct [:var, :context, :module]
+
+    @spec new({atom(), atom(), atom()}) :: ChitChat.Claim.Var.t()
+    def new({var, context, module}) do
+      %Var{var: var, context: context, module: module}
+    end
+  end
+
+  defmodule And do
+    @doc """
+    A conjunction of claims.
+    """
+    alias ChitChat.Claim
+    alias And
+
+    @type t(claim_type) :: %And{list: [claim_type]}
+    defstruct [:list]
+
+    @spec new([Claim.cterm()]) :: And.t(Claim.cterm())
+    def new(list) do
+      %And{list: list}
+    end
+  end
+
+  @type pattern_ast :: {:{}, [], [pattern_ast()]} | {:and, keyword(), [pattern_ast()]} | cterm()
+
+  @type pattern :: And.t(cterm) | cterm
+  @type cterm :: atomic | variable | [cterm]
+  @type variable :: Var.t() | :_
+  # matchable terms
+  @type atomic :: number | atom | binary
 
   @doc """
-  Matches a claim against a stored pattern. See `ChitChat.Claim.match/2` for more information.
-  TODO: perhaps put this function inside a separate module?
+  Transforms the syntax tree of a pattern into a piece of pattern data.
   """
-  @spec match([term], [term]) :: {:ok, map} | {:error, {term, {term, term}, {term, term}}}
-  def match(pattern, claim) do
-    match(pattern, claim, %{})
+  @spec ast_to_pattern(pattern_ast) :: pattern
+  def ast_to_pattern({:{}, [], list}) do
+    list |> Enum.map(&ast_to_pattern/1)
   end
 
-  @doc """
-  Matches a claim against a stored pattern.
-  Assumes that all tuples in the claim and pattern have been transformed into lists.
+  def ast_to_pattern({:and, _, list}) do
+    transformed_list = list |> Enum.map(&ast_to_pattern/1)
 
-  Returns `{:ok, new_env}` if the claim matches the pattern, where new_env is the environment extended with the new bindings.
+    new_list =
+      case transformed_list do
+        [%And{list: list}, y] -> [y | list]
+        [x, y] -> [x, y]
+      end
 
-  Returns `{:error, {:length_mismatch, lhs, rhs} | {:variable_mismatch, var, new_value, old_value} | {:value_mismatch, value1, value2}}` if the claim does not match the pattern.
-  """
-  @spec match([term], [term], map) ::
-          {:ok, map}
-          | {:error,
-             {:length_mismatch, [term], [term]}
-             | {:variable_mismatch, term, term, term}
-             | {:value_mismatch, term, term}}
-  def match([{:var, lvar} | ls], [r | rs], env) do
-    case match(ls, rs, env) do
-      {:ok, env} ->
-        if(Map.has_key?(env, lvar)) do
-          if(env[lvar] == r) do
-            {:ok, env}
-          else
-            {:error, {:variable_mismatch, lvar, r, env[lvar]}}
-          end
-        else
-          {:ok, Map.put(env, lvar, r)}
-        end
+    And.new(new_list)
+  end
 
-      {:error, reason} ->
-        {:error, reason}
+  def ast_to_pattern({:_, _, _}) do
+    :_
+  end
+
+  def ast_to_pattern({var, context, module}) when is_atom(var) do
+    Var.new({var, context, module})
+  end
+
+  def ast_to_pattern(x) when is_list(x), do: x |> Enum.map(&ast_to_pattern/1)
+  def ast_to_pattern(x) when is_tuple(x), do: x |> Tuple.to_list() |> ast_to_pattern()
+  def ast_to_pattern(x), do: x
+
+  @type env :: %{} | %{Var.t => term}
+
+  @spec walk(term, env) :: term
+  def walk(cterm, env) do
+    case Map.fetch(env, cterm) do
+      {:ok, val} -> walk(val, env)
+      :error -> cterm
     end
   end
 
-  def match([l | ls], [r | rs], env) when is_list(l) and is_list(r) do
-    case match(l, r, env) do
-      {:ok, env} -> match(ls, rs, env)
-      {:error, reason} -> {:error, reason}
+  @spec simplify(pattern, env) :: pattern
+  def simplify(cterm, env) do
+    case walk(cterm, env) do
+      [h | t] -> [simplify(h, env) | simplify(t, env)]
+      cterm -> cterm
     end
   end
 
-  def match([l | ls], [r | rs], env) do
-    if(l == r) do
-      match(ls, rs, env)
-    else
-      {:error, {:value_mismatch, l, r}}
-    end
+  @spec do_unify(env, cterm, cterm) :: {:ok, env} | {:error, env, cterm, cterm}
+  def unify(env, term1, term2) do
+    do_unify(env, simplify(term1, env), simplify(term2, env))
   end
 
-  def match([], [], env) do
+  defp do_unify(env, :_, _) do
     {:ok, env}
   end
 
-  def match(lhs, rhs, _) do
-    # one of lhs and rhs is the empty list, but not both
-    {:error, {:length_mismatch, lhs, rhs}}
+  defp do_unify(env, _, :_) do
+    {:ok, env}
+  end
+
+  defp do_unify(env, term1, term2) when term1 == term2 do
+    {:ok, env}
+  end
+
+  defp do_unify(env, term1, %Var{} = var) do
+    extend(env, var, term1)
+  end
+
+  defp do_unify(env, %Var{} = var, term2) do
+    extend(env, var, term2)
+  end
+
+  defp do_unify(env, [h1 | t1], [h2 | t2]) do
+    with {:ok, env} <- do_unify(env, h1, h2) do
+      do_unify(env, t1, t2)
+    end
+  end
+
+  defp do_unify(env, term1, term2) do
+    {:error, env, term1, term2}
+  end
+
+  @spec extend(env, Var.t, cterm) :: {:ok, env}
+  defp extend(env, var, cterm) do
+    {:ok, Map.put(env, var, cterm)}
   end
 end
