@@ -1,6 +1,6 @@
 # ChitChat
 
-A Realtalk-like dynamic medium in the real world.
+Prototype of a Realtalk-like dynamic medium in the real world.
 
 (Proof of concept)
 
