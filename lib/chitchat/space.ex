@@ -54,72 +54,72 @@ defmodule ChitChat.Space do
      }}
   end
 
-  def handle_call(
-        {:assert, client_pid, claim},
-        _from,
-        %{watches: watches, runs: runs, refs: refs, claims: claims}
-      ) do
-    claim = Claim.transform(claim)
-    # TODO one pattern can match multiple claims. Then what?
-    new_runs =
-      for {client, pattern} <- watches, {:ok, env} = Claim.match(pattern, claim), into: runs do
-        pid = start_client(client, env)
-        {pid, client}
-      end
+  # def handle_call(
+  #       {:assert, client_pid, claim},
+  #       _from,
+  #       %{watches: watches, runs: runs, refs: refs, claims: claims}
+  #     ) do
+  #   claim = Claim.transform(claim)
+  #   # TODO one pattern can match multiple claims. Then what?
+  #   new_runs =
+  #     for {client, pattern} <- watches, {:ok, env} = Claim.match(pattern, claim), into: runs do
+  #       pid = start_client(client, env)
+  #       {pid, client}
+  #     end
 
-    ref = make_ref()
+  #   ref = make_ref()
 
-    {:reply, :ok,
-     %{
-       watches: watches,
-       runs: new_runs,
-       refs: Map.put(refs, ref, claim),
-       claims: Map.put(claims, ref, client_pid)
-     }}
-  end
+  #   {:reply, :ok,
+  #    %{
+  #      watches: watches,
+  #      runs: new_runs,
+  #      refs: Map.put(refs, ref, claim),
+  #      claims: Map.put(claims, ref, client_pid)
+  #    }}
+  # end
 
-  def handle_call(
-        {:register, _pid, pattern, module, function_name},
-        _from,
-        %{watches: watches} = state
-      ) do
-    client = {pattern, module, function_name}
-    new_watches = Map.put(watches, client, pattern)
-    {:reply, :ok, %{state | watches: new_watches}}
-  end
+  # def handle_call(
+  #       {:register, _pid, pattern, module, function_name},
+  #       _from,
+  #       %{watches: watches} = state
+  #     ) do
+  #   client = {pattern, module, function_name}
+  #   new_watches = Map.put(watches, client, pattern)
+  #   {:reply, :ok, %{state | watches: new_watches}}
+  # end
 
-  def handle_call(
-        {:register, _pid, pattern, function},
-        _from,
-        %{watches: watches} = state
-      ) do
-    client = {pattern, function}
-    new_watches = Map.put(watches, client, pattern)
-    {:reply, :ok, %{state | watches: new_watches}}
-  end
+  # def handle_call(
+  #       {:register, _pid, pattern, function},
+  #       _from,
+  #       %{watches: watches} = state
+  #     ) do
+  #   client = {pattern, function}
+  #   new_watches = Map.put(watches, client, pattern)
+  #   {:reply, :ok, %{state | watches: new_watches}}
+  # end
 
-  def handle_info(
-        {:DOWN, _ref, :process, client_pid, _reason},
-        %{
-          watches: watches,
-          runs: runs,
-          refs: refs,
-          claims: claims
-        } = state
-      ) do
-    retracted_claims = claims |> Map.keys() |> Enum.filter(&(Map.get(runs, &1) == client_pid))
-    new_watches = Map.delete(watches, client_pid)
-    {:noreply, %{state | watches: new_watches}}
-  end
+  # def handle_info(
+  #       {:DOWN, _ref, :process, client_pid, _reason},
+  #       %{
+  #         watches: watches,
+  #         runs: runs,
+  #         refs: refs,
+  #         claims: claims
+  #       } = state
+  #     ) do
+  #   retracted_claims = claims |> Map.keys() |> Enum.filter(&(Map.get(runs, &1) == client_pid))
+  #   new_watches = Map.delete(watches, client_pid)
+  #   {:noreply, %{state | watches: new_watches}}
+  # end
 
-  @spec start_client(client, map) :: pid
-  defp start_client({pattern, module, function_name}, env) do
-    # start a client as a Task under the space's supervisor
-    self()
-  end
+  # @spec start_client(client, map) :: pid
+  # defp start_client({pattern, module, function_name}, env) do
+  #   # start a client as a Task under the space's supervisor
+  #   self()
+  # end
 
-  defp start_client({pattern, function}, env) do
-    # start a client as a Task under the space's supervisor
-    self()
-  end
+  # defp start_client({pattern, function}, env) do
+  #   # start a client as a Task under the space's supervisor
+  #   self()
+  # end
 end

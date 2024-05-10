@@ -75,16 +75,50 @@ defmodule ChitChat.Claim do
   def ast_to_pattern(x) when is_tuple(x), do: x |> Tuple.to_list() |> ast_to_pattern()
   def ast_to_pattern(x), do: x
 
-  @type env :: %{} | %{Var.t => term}
-
-  @spec walk(cterm, env) :: cterm
-  def walk(term, env) do
-    case Map.fetch(env, term) do
-      {:ok, val} -> walk(val, env)
-      :error -> term
+  @type goal :: (env -> [env])
+  @doc """
+  Declares that term1 is equal to term2.
+  """
+  @spec equal(cterm, cterm) :: goal
+  def equal(term1, term2) do
+    fn env ->
+      case unify(env, term1, term2) do
+        {:ok, env} -> [env]
+        {:error, _env, _term1, _term2} -> []
+      end
+    end
+  end
+  @doc """
+  Declares that all of these goals must be satisfied.
+  """
+  @spec all_of([goal]) :: goal
+  def all_of(goals) do
+    fn env ->
+      goals
+      |> Enum.reduce([env], fn goal, acc ->
+        acc |> Enum.flat_map(goal)
+      end)
     end
   end
 
+  @doc """
+  Declares that any one of these goals must be satisfied.
+  """
+  @spec any_of([goal]) :: goal
+  def any_of(goals) do
+    fn env ->
+      goals |> Enum.flat_map(fn goal -> goal.(env) end)
+    end
+  end
+  @doc """
+  Shows the values of the variables in the environment.
+  """
+  @spec show(goal, [variable]) :: [term]
+  def show(goal, vars) do
+    Enum.map(goal.(%{}), fn env -> Enum.map(vars, &walk(&1, env)) end)
+  end
+
+  @type env :: %{} | %{Var.t() => term}
   @doc """
   Substitutes variables in a pattern with their values in the environment.
   """
@@ -93,6 +127,14 @@ defmodule ChitChat.Claim do
     case walk(term, env) do
       [h | t] -> [simplify(h, env) | simplify(t, env)]
       term -> term
+    end
+  end
+
+  @spec walk(cterm, env) :: cterm
+  def walk(term, env) do
+    case Map.fetch(env, term) do
+      {:ok, val} -> walk(val, env)
+      :error -> term
     end
   end
 
@@ -135,7 +177,7 @@ defmodule ChitChat.Claim do
     {:error, env, term1, term2}
   end
 
-  @spec extend(env, Var.t, cterm) :: {:ok, env}
+  @spec extend(env, Var.t(), cterm) :: {:ok, env}
   defp extend(env, var, cterm) do
     {:ok, Map.put(env, var, cterm)}
   end

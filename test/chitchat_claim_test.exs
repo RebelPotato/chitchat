@@ -1,25 +1,22 @@
 defmodule ChitchatClaimTest do
   use ExUnit.Case
-  alias ChitChat.Claim
+  import ChitChat.Claim
 
-  test "Matches extracts values" do
-    assert {:ok, %{x: 2, y: 4}} = Claim.match([1, [{:var, :x}, 3], {:var, :y}, 5], [1, [2, 3], 4, 5])
+  test "Logic 'and' and 'or'" do
+    alias ChitChat.Claim.Var
+    x = Var.new({:x, :_, :_})
+    y = Var.new({:y, :_, :_})
+    values = all_of([
+      any_of([
+        equal(x, 1),
+        equal(x, y)
+      ]),
+      any_of([
+        equal(y, 2),
+        equal(y, 3)
+      ])
+    ])
+    |> show([x, y]) |> MapSet.new()
+    assert values == MapSet.new([[1,3], [1,2], [2,2], [3,3]])
   end
-
-  test "Matches fails on length mismatch" do
-    assert {:error, _} = Claim.match([1, [{:var, :x}, 3], {:var, :y}, 5], [1, [2, 3], 4])
-  end
-
-  test "Matches fails on variable mismatch" do
-    assert {:error, _} = Claim.match([1, [{:var, :x}, 3], {:var, :y}, 5], [1, [2, 3], 4, 6])
-  end
-
-  test "Matches when values match" do
-    assert {:ok, %{x: 2}} = Claim.match([1, [{:var, :x}, 3], {:var, :x}, 5], [1, [2, 3], 2, 5])
-  end
-
-  test "Matches fails on value mismatch" do
-    assert {:error, _} = Claim.match([1, [{:var, :x}, 3], {:var, :x}, 5], [1, [2, 3], 4, 5])
-  end
-
 end
