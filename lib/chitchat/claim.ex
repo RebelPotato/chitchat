@@ -1,6 +1,8 @@
 defmodule ChitChat.Claim do
   @moduledoc """
-  Utility functions for operating on claims.
+  Utility functions for operating on patterns and claims.
+
+  A pattern is a conjunction or disjunction of claims. Claims can contain variables.
   """
   defmodule Var do
     @doc """
@@ -75,27 +77,34 @@ defmodule ChitChat.Claim do
 
   @type env :: %{} | %{Var.t => term}
 
-  @spec walk(term, env) :: term
-  def walk(cterm, env) do
-    case Map.fetch(env, cterm) do
+  @spec walk(cterm, env) :: cterm
+  def walk(term, env) do
+    case Map.fetch(env, term) do
       {:ok, val} -> walk(val, env)
-      :error -> cterm
+      :error -> term
     end
   end
 
+  @doc """
+  Substitutes variables in a pattern with their values in the environment.
+  """
   @spec simplify(pattern, env) :: pattern
-  def simplify(cterm, env) do
-    case walk(cterm, env) do
+  def simplify(term, env) do
+    case walk(term, env) do
       [h | t] -> [simplify(h, env) | simplify(t, env)]
-      cterm -> cterm
+      term -> term
     end
   end
 
-  @spec do_unify(env, cterm, cterm) :: {:ok, env} | {:error, env, cterm, cterm}
+  @doc """
+  Unifies two terms.
+  """
+  @spec unify(env, cterm, cterm) :: {:ok, env} | {:error, env, cterm, cterm}
   def unify(env, term1, term2) do
     do_unify(env, simplify(term1, env), simplify(term2, env))
   end
 
+  @spec do_unify(env, cterm, cterm) :: {:ok, env} | {:error, env, cterm, cterm}
   defp do_unify(env, :_, _) do
     {:ok, env}
   end
