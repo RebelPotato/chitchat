@@ -52,11 +52,20 @@ defmodule ChitChat.Space do
   @type client_data :: %{
           reference => %{
             pattern: pattern,
-            function: registered_function
+            function: registered_function,
+            task: Task.t()
           }
         }
 
   @type clients :: %{pid => %{type: reference, claims: [claim]}}
+  @type state :: %{
+          claim_shapes: claim_shapes,
+          pattern_shapes: pattern_shapes,
+          client_data: client_data,
+          active_clients: clients
+        }
+
+  @spec init(any) :: {:ok, state}
   def init(_) do
     {:ok,
      %{
@@ -71,16 +80,32 @@ defmodule ChitChat.Space do
      }}
   end
 
-  def handle_call(
-        {:assert, client_pid, new_claim},
-        _from,
-        %{
-          claim_shapes: claim_shapes,
-          pattern_shapes: pattern_shapes,
-          client_data: client_data,
-          active_clients: active_clients
-        } = state
-      ) do
+  def handle_call({:assert, client_pid, new_claim}, _from, state) do
+    state = just_assert(client_pid, new_claim, state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:register, _pid, pattern, func}, _from, state) do
+    state = just_register(pattern, func, state)
+    {:reply, :ok, state}
+  end
+
+  def handle_info({:DOWN, _ref, :process, client_pid, _reason}, state) do
+    state = just_remove(client_pid, state)
+    {:noreply, state}
+  end
+
+  @spec just_assert(pid, claim, state) :: state
+  defp just_assert(
+         client_pid,
+         new_claim,
+         %{
+           claim_shapes: claim_shapes,
+           pattern_shapes: pattern_shapes,
+           client_data: client_data,
+           active_clients: active_clients
+         } = state
+       ) do
     shape = Claim.to_shape(new_claim)
 
     matches =
@@ -91,7 +116,7 @@ defmodule ChitChat.Space do
               pterm <- pattern,
               pshape = Claim.to_shape(pterm),
               {:ok, claims} = Map.fetch(claim_shapes, pshape),
-              claims = (if shape === pshape, do: [new_claim | claims], else: claims),
+              claims = if(shape === pshape, do: [new_claim | claims], else: claims),
               reduce: [{false, %{}}] do
             acc ->
               for {status, env} <- acc,
@@ -109,25 +134,30 @@ defmodule ChitChat.Space do
     new_claim_shapes = Map.update(claim_shapes, shape, [new_claim], &[new_claim | &1])
 
     new_clients =
+      Map.update!(
+        active_clients,
+        client_pid,
+        &Map.update!(&1, :claims, fn list -> [new_claim | list] end)
+      )
+
+    new_clients =
       for {env, ref} <- envs,
           {:ok, %{function: func}} = Map.fetch(client_data, ref),
           task = start_client(env, func),
-          reduce: active_clients do
+          reduce: new_clients do
         acc -> Map.put(acc, task.pid, %{type: ref, claims: [], task: task})
       end
-    {:reply, :ok, %{state | claim_shapes: new_claim_shapes, active_clients: new_clients}}
+
+    %{state | claim_shapes: new_claim_shapes, active_clients: new_clients}
   end
 
-  def handle_call(
-        {:register, _pid, pattern, func},
-        _from,
-        %{
-          claim_shapes: claim_shapes,
-          pattern_shapes: pattern_shapes,
-          client_data: client_data,
-          active_clients: active_clients
-        }
-      ) do
+  @spec just_register(pattern, registered_function, state) :: state
+  defp just_register(pattern, func, %{
+         claim_shapes: claim_shapes,
+         pattern_shapes: pattern_shapes,
+         client_data: client_data,
+         active_clients: active_clients
+       }) do
     envs =
       for pterm <- pattern,
           shape = Claim.to_shape(pterm),
@@ -156,17 +186,17 @@ defmodule ChitChat.Space do
         acc -> Map.put(acc, task.pid, %{type: ref, claims: [], task: task})
       end
 
-    {:reply, :ok,
-     %{
-       claim_shapes: claim_shapes,
-       pattern_shapes: new_pattern_shapes,
-       client_data: new_client_data,
-       active_clients: new_clients
-     }}
+    %{
+      claim_shapes: claim_shapes,
+      pattern_shapes: new_pattern_shapes,
+      client_data: new_client_data,
+      active_clients: new_clients
+    }
   end
 
-  def handle_info(
-        {:DOWN, _ref, :process, client_pid, _reason},
+  @spec just_remove(pid, state) :: state
+  def just_remove(
+        client_pid,
         %{
           claim_shapes: claim_shapes,
           pattern_shapes: pattern_shapes,
@@ -174,14 +204,23 @@ defmodule ChitChat.Space do
           active_clients: active_clients
         } = state
       ) do
-    {:noreply, state}
+    IO.warn("not implemented")
+    state
   end
 
-  @spec start_client(env, registered_function) :: Task.t()
-  defp start_client(env, {module, function_name}) do
+  @spec end_client(Task.t()) :: :ok
+  def end_client(task) do
+    Task.shutdown(task)
+  end
+
+  @spec start_client((-> any())) :: Task.t()
+  def start_client(func), do: start_client(func, %{})
+
+  @spec start_client(registered_function, env) :: Task.t()
+  def start_client({module, function_name}, env) do
     # start a client as a Task under the space's supervisor
     task =
-      Task.Supervisor.async(
+      Task.Supervisor.async_nolink(
         ChitChat.Space.TaskSupervisor,
         module,
         function_name,
@@ -192,11 +231,11 @@ defmodule ChitChat.Space do
     task
   end
 
-  defp start_client(_env, func) do
+  def start_client(func, _env) do
     # start a client as a Task under the space's supervisor
     # TODO: implement this
     task =
-      Task.Supervisor.async(
+      Task.Supervisor.async_nolink(
         ChitChat.Space.TaskSupervisor,
         func
       )
