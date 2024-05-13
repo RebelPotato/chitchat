@@ -3,6 +3,6 @@
 pkgs.mkShell {
   buildInputs = with pkgs; [
     # elixir
-    elixir_1_16 rebar3 elixir-ls clips
+    elixir_1_16 rebar3 elixir-ls
   ];
 }

@@ -10,7 +10,7 @@ defmodule ChitChat.Supervisor do
 
   def init(:ok) do
     children = [
-      {DynamicSupervisor, name: ChitChat.Space.PatternSupervisor},
+      {TaskSupervisor, name: ChitChat.Space.TaskSupervisor},
       {ChitChat.Space, name: ChitChat.Space},
     ]
 
