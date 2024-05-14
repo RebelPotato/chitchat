@@ -20,19 +20,23 @@ defmodule ChitChat.Space do
   @type atomic :: number | atom | binary
 
   @type env :: %{} | %{Claim.Var.t() => claim}
+
+  @type space :: pid
   # client
   @doc """
   Assert a claim. Automatically retracted when the client dies.
   """
-  @spec assert(pid, claim) :: :ok
+  @spec assert(space, claim) :: :ok
   def assert(space, claim) do
     GenServer.call(space, {:assert, self(), claim})
   end
 
   @doc """
   Register a task to be run on a certain pattern. The matched environment will be passed to the function as args.
+
+  Returns a reference that can be used to unregister the task.
   """
-  @spec register(pid, pattern, module, atom) :: :ok
+  @spec register(space, pattern, module, atom) :: reference
   def register(space, pattern, module, function_name) do
     GenServer.call(space, {:register, self(), pattern, {module, function_name}})
   end
@@ -40,9 +44,14 @@ defmodule ChitChat.Space do
   @doc """
   Register a simple task without arguments to be run on a certain pattern.
   """
-  @spec register(pid, pattern, (-> any())) :: :ok
+  @spec register(space, pattern, (-> any())) :: reference
   def register(space, pattern, function) do
     GenServer.call(space, {:register, self(), pattern, function})
+  end
+
+  @spec unregister(space, reference) :: :ok
+  def unregister(space, ref) do
+    GenServer.call(space, {:unregister, self(), ref})
   end
 
   # server
@@ -53,11 +62,11 @@ defmodule ChitChat.Space do
           reference => %{
             pattern: pattern,
             function: registered_function,
-            task: Task.t()
+            active: [pid]
           }
         }
 
-  @type clients :: %{pid => %{type: reference, claims: [claim]}}
+  @type clients :: %{pid => %{type: reference, claims: [claim], task: Task.t()}}
   @type state :: %{
           claim_shapes: claim_shapes,
           pattern_shapes: pattern_shapes,
@@ -86,7 +95,12 @@ defmodule ChitChat.Space do
   end
 
   def handle_call({:register, _pid, pattern, func}, _from, state) do
-    state = just_register(pattern, func, state)
+    {state, ref} = just_register(pattern, func, state)
+    {:reply, ref, state}
+  end
+
+  def handle_call({:unregister, _pid, ref}, _from, state) do
+    state = just_unregister(ref, state)
     {:reply, :ok, state}
   end
 
@@ -133,25 +147,25 @@ defmodule ChitChat.Space do
 
     new_claim_shapes = Map.update(claim_shapes, shape, [new_claim], &[new_claim | &1])
 
-    new_clients =
-      Map.update!(
-        active_clients,
-        client_pid,
-        &Map.update!(&1, :claims, fn list -> [new_claim | list] end)
-      )
+    # new_clients =
+    #   Map.update!(
+    #     active_clients,
+    #     client_pid,
+    #     &Map.update!(&1, :claims, fn list -> [new_claim | list] end)
+    #   )
 
-    new_clients =
-      for {env, ref} <- envs,
-          {:ok, %{function: func}} = Map.fetch(client_data, ref),
-          task = start_client(env, func),
-          reduce: new_clients do
-        acc -> Map.put(acc, task.pid, %{type: ref, claims: [], task: task})
-      end
+    # new_clients =
+    #   for {env, ref} <- envs,
+    #       {:ok, %{function: func}} = Map.fetch(client_data, ref),
+    #       task = start_client(env, func),
+    #       reduce: new_clients do
+    #     acc -> Map.put(acc, task.pid, %{type: ref, claims: [], task: task})
+    #   end
 
-    %{state | claim_shapes: new_claim_shapes, active_clients: new_clients}
+    # %{state | claim_shapes: new_claim_shapes, active_clients: new_clients}
   end
 
-  @spec just_register(pattern, registered_function, state) :: state
+  @spec just_register(pattern, registered_function, state) :: {state, reference}
   defp just_register(pattern, func, %{
          claim_shapes: claim_shapes,
          pattern_shapes: pattern_shapes,
@@ -177,40 +191,101 @@ defmodule ChitChat.Space do
         acc -> Map.update(acc, shape, [ref], &[ref | &1])
       end
 
-    new_client_data = Map.put(client_data, ref, %{pattern: pattern, function: func})
+    started_tasks = for env <- envs, do: start_client(env, func)
+
+    new_client_data =
+      Map.put(client_data, ref, %{
+        pattern: pattern,
+        function: func,
+        active: Enum.map(started_tasks, & &1.pid)
+      })
 
     new_clients =
-      for env <- envs,
-          task = start_client(env, func),
-          reduce: active_clients do
+      for task <- started_tasks, reduce: active_clients do
         acc -> Map.put(acc, task.pid, %{type: ref, claims: [], task: task})
       end
 
-    %{
+    state = %{
       claim_shapes: claim_shapes,
+      pattern_shapes: new_pattern_shapes,
+      client_data: new_client_data,
+      active_clients: new_clients
+    }
+
+    {state, ref}
+  end
+
+  @spec just_unregister(reference, state) :: state
+  defp just_unregister(
+         ref,
+         %{
+           claim_shapes: claim_shapes,
+           pattern_shapes: pattern_shapes,
+           client_data: client_data,
+           active_clients: active_clients
+         } = state
+       ) do
+    IO.warn("not implemented")
+    state
+  end
+
+  # after pid dies, remove all traces of it from state
+  # and shutdown all tasks that use its claims
+  @spec just_remove(pid, state) :: state
+  defp just_remove(
+         client_pid,
+         %{
+           claim_shapes: claim_shapes,
+           pattern_shapes: pattern_shapes,
+           client_data: client_data,
+           active_clients: active_clients
+         } = state
+       ) do
+    %{type: type, claims: deleted_claims} = Map.fetch!(active_clients, client_pid)
+    %{pattern: deleted_pattern} = Map.fetch!(client_data, type)
+
+    new_claim_shapes =
+      for claim <- deleted_claims,
+          shape = Claim.to_shape(claim),
+          reduce: claim_shapes do
+        acc -> remove_from(acc, shape, claim)
+      end
+
+    new_pattern_shapes =
+      for pterm <- deleted_pattern, shape = Claim.to_shape(pterm), reduce: pattern_shapes do
+        acc -> remove_from(acc, shape, type)
+      end
+
+    new_client_data =
+      Map.update!(client_data, type, fn client ->
+        Map.update!(client, :active, &List.delete(&1, client_pid))
+      end)
+
+    new_clients = Map.delete(active_clients, client_pid)
+
+    %{
+      claim_shapes: new_claim_shapes,
       pattern_shapes: new_pattern_shapes,
       client_data: new_client_data,
       active_clients: new_clients
     }
   end
 
-  @spec just_remove(pid, state) :: state
-  def just_remove(
-        client_pid,
-        %{
-          claim_shapes: claim_shapes,
-          pattern_shapes: pattern_shapes,
-          client_data: client_data,
-          active_clients: active_clients
-        } = state
-      ) do
-    IO.warn("not implemented")
-    state
+  @spec remove_from(%{shape => [any]}, shape, any) :: %{shape => [any]}
+  defp remove_from(shape_map, shape, value) do
+    case Map.fetch(shape_map, shape) do
+      {:ok, list} ->
+        Map.put(shape_map, shape, List.delete(list, value))
+
+      _ ->
+        shape_map
+    end
   end
 
   @spec end_client(Task.t()) :: :ok
   def end_client(task) do
     Task.shutdown(task)
+    :ok
   end
 
   @spec start_client((-> any())) :: Task.t()
